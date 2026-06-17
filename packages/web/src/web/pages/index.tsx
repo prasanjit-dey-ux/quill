@@ -1019,7 +1019,7 @@ function Index() {
   const remaining = todos.filter((b) => !b.done).length;
 
   return (
-    <div className="min-h-screen bg-[#f5f5f3] text-ink font-sans flex" style={{ backgroundImage: "radial-gradient(circle, #d0d0ce 1px, transparent 1px)", backgroundSize: "22px 22px" }}>
+    <div className="min-h-screen bg-white text-ink font-sans flex">
       {/* left sidebar */}
       <LeftSidebar
         pages={pages}
@@ -1132,7 +1132,7 @@ function Index() {
         </div>
 
         {/* page content — white card on dot bg */}
-        <div className="mx-auto max-w-[720px] px-[80px] pt-[10vh] pb-32 min-h-screen bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.04),0_4px_24px_rgba(0,0,0,0.05)]" style={{ marginTop: 0 }}>
+        <div className="mx-auto max-w-[720px] px-[80px] pt-[10vh] pb-32 min-h-screen" style={{ marginTop: 0 }}>
           <AutoTextarea
             value={activePage?.title ?? ""}
             onChange={(e) => setTitle(e.target.value)}
@@ -1178,32 +1178,7 @@ function Index() {
 
           <AddRow onAdd={addBlock} onType={onKeyType} focusRef={addRowFocusRef} />
 
-          {/* file drop hint */}
-          <div className="mt-4 flex items-center gap-2">
-            <label
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] text-[#9aa4b6] hover:text-[#5a6273] hover:bg-[#f4f4f1] transition-colors cursor-pointer select-none"
-              title="Attach image, GIF, PDF or document"
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <path d="M8 3v8M5 9l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M2.5 12.5h11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-              </svg>
-              Attach file
-              <input
-                type="file"
-                multiple
-                accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
-                className="sr-only"
-                onChange={async (e) => {
-                  if (e.target.files?.length) {
-                    await handleDroppedFiles(e.target.files);
-                    e.target.value = "";
-                  }
-                }}
-              />
-            </label>
-            <span className="text-[11px] text-[#c7c7c4]">or drag & drop anywhere</span>
-          </div>
+
         </div>{/* end page content */}
 
         {/* floating Pomodoro/clock — self-positioned, draggable */}
