@@ -15,10 +15,15 @@ import { headingLevel, HEADING_CLASS, RichText } from "../lib/richtext";
 
 type Block = {
   id: string;
-  kind: "todo" | "note";
+  kind: "todo" | "note" | "media";
   text: string;
   done: boolean;
   color?: string; // user-set text color key (e.g. "sky", "blue", "red")
+  // media fields — only set when kind === "media"
+  mediaData?: string;        // base64 data URL or object URL
+  mediaType?: string;        // MIME type e.g. "image/png", "image/gif", "application/pdf"
+  mediaName?: string;        // original filename
+  mediaWidth?: number;       // px width (for resizable images)
 };
 
 type Page = {
@@ -83,6 +88,47 @@ function uid() { return Math.random().toString(36).slice(2, 10); }
 const TIME_CMD_RE = /\/add\s+time\b ?/i;
 function applyTimeCmd(value: string): string {
   return value.replace(TIME_CMD_RE, "{{time}} ");
+}
+
+// ── media helpers ─────────────────────────────────────────────────────────
+async function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result as string);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
+function isImageMime(mime: string) {
+  return mime.startsWith("image/");
+}
+
+function isDocMime(mime: string) {
+  return [
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "text/plain",
+    "text/csv",
+  ].includes(mime);
+}
+
+function acceptedFile(file: File) {
+  return isImageMime(file.type) || isDocMime(file.type);
+}
+
+function fileCategoryIcon(mime: string) {
+  if (mime === "application/pdf") return "PDF";
+  if (mime.includes("word")) return "DOC";
+  if (mime.includes("excel") || mime.includes("spreadsheet") || mime === "text/csv") return "XLS";
+  if (mime.includes("presentation") || mime.includes("powerpoint")) return "PPT";
+  if (mime === "text/plain") return "TXT";
+  return "FILE";
 }
 
 function parseMd(text: string): { done: boolean; rest: string } | null {
@@ -631,6 +677,7 @@ function Index() {
   const [aiOpen, setAiOpen] = useState<boolean>(() => load<boolean>(LS_AIPANEL, false));
   const [aiPrefill, setAiPrefill] = useState<string | undefined>(undefined);
   const [shareOpen, setShareOpen] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
 
   const addRowFocusRef = useRef<(() => void) | null>(null);
   const mutedRef = useRef(muted);
@@ -763,6 +810,26 @@ function Index() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, pages]);
 
+  // ── global paste handler — catches image pastes from clipboard ──
+  useEffect(() => {
+    const onPaste = async (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement;
+      const inText = target.tagName === "TEXTAREA" || target.tagName === "INPUT";
+      if (inText) return; // let textarea handle its own paste
+      if (!e.clipboardData) return;
+      const files = Array.from(e.clipboardData.files).filter(acceptedFile);
+      if (files.length === 0) return;
+      e.preventDefault();
+      for (const f of files) {
+        const dataUrl = await readFileAsDataURL(f);
+        addMediaBlock(f, dataUrl);
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, pages]);
+
   // ── page helpers ──
   const activePage = pages.find((p) => p.id === activeId) ?? pages[0];
 
@@ -776,6 +843,28 @@ function Index() {
     const t = text.trim();
     if (!t && kind === "note") return;
     setBlocks((prev) => [...prev, { id: uid(), kind, text: t, done }]);
+  };
+
+  const addMediaBlock = (file: File, dataUrl: string) => {
+    const block: Block = {
+      id: uid(),
+      kind: "media",
+      text: file.name,
+      done: false,
+      mediaData: dataUrl,
+      mediaType: file.type,
+      mediaName: file.name,
+      mediaWidth: isImageMime(file.type) ? 480 : undefined,
+    };
+    setBlocks((prev) => [...prev, block]);
+  };
+
+  const handleDroppedFiles = async (files: FileList | File[]) => {
+    const arr = Array.from(files).filter(acceptedFile);
+    for (const f of arr) {
+      const dataUrl = await readFileAsDataURL(f);
+      addMediaBlock(f, dataUrl);
+    }
   };
   const toggle = (id: string) =>
     setBlocks((prev) =>
@@ -893,6 +982,7 @@ function Index() {
   const serializeNote = () => {
     const t = activePage?.title ? `${activePage.title}\n\n` : "";
     const body = (activePage?.blocks ?? [])
+      .filter((b) => b.kind !== "media")
       .map((b) =>
         b.kind === "todo" ? `- [${b.done ? "x" : " "}] ${b.text}` : b.text
       )
@@ -929,7 +1019,7 @@ function Index() {
   const remaining = todos.filter((b) => !b.done).length;
 
   return (
-    <div className="min-h-screen bg-white text-ink font-sans flex">
+    <div className="min-h-screen bg-[#f5f5f3] text-ink font-sans flex" style={{ backgroundImage: "radial-gradient(circle, #d0d0ce 1px, transparent 1px)", backgroundSize: "22px 22px" }}>
       {/* left sidebar */}
       <LeftSidebar
         pages={pages}
@@ -950,9 +1040,31 @@ function Index() {
 
       {/* main area — shifts right when sidebar open */}
       <div
-        className="flex-1 min-h-screen transition-all duration-200"
+        className="flex-1 min-h-screen transition-all duration-200 relative"
         style={{ marginLeft: sidebarOpen ? 220 : 0, marginRight: aiOpen ? 320 : 0 }}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false); }}
+        onDrop={async (e) => {
+          e.preventDefault();
+          setDragOver(false);
+          if (e.dataTransfer.files.length > 0) {
+            await handleDroppedFiles(e.dataTransfer.files);
+          }
+        }}
       >
+        {/* drag-over overlay */}
+        {dragOver && (
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-white/90 backdrop-blur-sm pointer-events-none rounded-none">
+            <div className="flex flex-col items-center gap-3 px-8 py-8 rounded-2xl border-2 border-dashed border-[#3b82f6] bg-blue-50/80">
+              <svg width="40" height="40" viewBox="0 0 40 40" fill="none" className="text-[#3b82f6]">
+                <path d="M20 8v16M13 15l7-7 7 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M7 28v4a1 1 0 001 1h24a1 1 0 001-1v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+              <p className="text-[15px] font-semibold text-[#1d4ed8]">Drop files to add</p>
+              <p className="text-[12px] text-[#6b88c4]">Images, GIFs, PDFs, documents</p>
+            </div>
+          </div>
+        )}
         {/* top-right controls */}
         <div
           className="fixed top-5 z-10 flex items-center gap-2 transition-all duration-200"
@@ -1019,8 +1131,8 @@ function Index() {
           </button>
         </div>
 
-        {/* page content */}
-        <div className="mx-auto max-w-[720px] px-[96px] pt-[12vh] pb-32">
+        {/* page content — white card on dot bg */}
+        <div className="mx-auto max-w-[720px] px-[80px] pt-[10vh] pb-32 min-h-screen bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.04),0_4px_24px_rgba(0,0,0,0.05)]" style={{ marginTop: 0 }}>
           <AutoTextarea
             value={activePage?.title ?? ""}
             onChange={(e) => setTitle(e.target.value)}
@@ -1065,6 +1177,33 @@ function Index() {
           </div>
 
           <AddRow onAdd={addBlock} onType={onKeyType} focusRef={addRowFocusRef} />
+
+          {/* file drop hint */}
+          <div className="mt-4 flex items-center gap-2">
+            <label
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] text-[#9aa4b6] hover:text-[#5a6273] hover:bg-[#f4f4f1] transition-colors cursor-pointer select-none"
+              title="Attach image, GIF, PDF or document"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="M8 3v8M5 9l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M2.5 12.5h11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+              </svg>
+              Attach file
+              <input
+                type="file"
+                multiple
+                accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
+                className="sr-only"
+                onChange={async (e) => {
+                  if (e.target.files?.length) {
+                    await handleDroppedFiles(e.target.files);
+                    e.target.value = "";
+                  }
+                }}
+              />
+            </label>
+            <span className="text-[11px] text-[#c7c7c4]">or drag & drop anywhere</span>
+          </div>
         </div>{/* end page content */}
 
         {/* floating Pomodoro/clock — self-positioned, draggable */}
@@ -1163,6 +1302,139 @@ function SelectionToolbar({
       <button className={btn(isBold)}      onMouseDown={(e) => { e.preventDefault(); wrap("**"); }}><b>B</b></button>
       <button className={btn(isItalic)}    onMouseDown={(e) => { e.preventDefault(); wrap("_"); }}><i>I</i></button>
       <button className={btn(isUnderline)} onMouseDown={(e) => { e.preventDefault(); wrap("__"); }}><span style={{ textDecoration: "underline" }}>U</span></button>
+    </div>
+  );
+}
+
+// ── MediaBlock ────────────────────────────────────────────────────────────
+function MediaBlock({
+  block,
+  onRemove,
+  onChange,
+}: {
+  block: Block;
+  onRemove: () => void;
+  onChange: (patch: Partial<Block>) => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const [resizing, setResizing] = useState(false);
+  const startX = useRef(0);
+  const startW = useRef(0);
+  const mime = block.mediaType ?? "";
+  const isImg = isImageMime(mime);
+  const w = block.mediaWidth ?? 480;
+
+  const onResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setResizing(true);
+    startX.current = e.clientX;
+    startW.current = w;
+
+    const onMove = (ev: MouseEvent) => {
+      const delta = ev.clientX - startX.current;
+      const next = Math.max(120, Math.min(960, startW.current + delta));
+      onChange({ mediaWidth: Math.round(next) });
+    };
+    const onUp = () => {
+      setResizing(false);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  if (isImg) {
+    return (
+      <div
+        className="my-2 group/media relative inline-block select-none"
+        style={{ width: w }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => !resizing && setHovered(false)}
+      >
+        <img
+          src={block.mediaData}
+          alt={block.mediaName ?? "image"}
+          className="block w-full rounded-xl object-contain"
+          style={{
+            boxShadow: "0 1px 4px rgba(0,0,0,0.07), 0 4px 16px rgba(0,0,0,0.06)",
+            cursor: "default",
+          }}
+          draggable={false}
+        />
+        {/* hover overlay controls */}
+        {hovered && (
+          <div className="absolute inset-0 rounded-xl ring-2 ring-[#3b82f6]/40 transition-all" />
+        )}
+        {/* delete button */}
+        {hovered && (
+          <button
+            onMouseDown={(e) => { e.preventDefault(); onRemove(); }}
+            className="absolute top-2 right-2 h-7 w-7 grid place-items-center rounded-full bg-white/90 border border-[#e5e5e2] shadow-sm text-[#6b7280] hover:text-[#ef4444] transition-colors"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+            </svg>
+          </button>
+        )}
+        {/* filename caption */}
+        {hovered && block.mediaName && (
+          <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded-md bg-black/40 text-white text-[11px] font-medium backdrop-blur-sm max-w-[80%] truncate">
+            {block.mediaName}
+          </div>
+        )}
+        {/* resize handle — right edge */}
+        <div
+          onMouseDown={onResizeStart}
+          className="absolute top-1/2 -translate-y-1/2 -right-2 h-10 w-2.5 flex items-center justify-center cursor-ew-resize opacity-0 group-hover/media:opacity-100 transition-opacity"
+        >
+          <div className="h-8 w-1 rounded-full bg-[#3b82f6]/70" />
+        </div>
+      </div>
+    );
+  }
+
+  // Document / PDF chip
+  const label = fileCategoryIcon(mime);
+  return (
+    <div
+      className="my-2 inline-flex items-center gap-3 px-4 py-3 rounded-xl border border-[#e5e5e2] bg-white hover:bg-[#f8f8f6] transition-colors group/media cursor-default select-none"
+      style={{ maxWidth: 400 }}
+    >
+      {/* icon */}
+      <div className="shrink-0 h-10 w-10 rounded-lg bg-[#f0f2f8] flex items-center justify-center">
+        <span className="text-[10px] font-bold text-[#3b82f6] tracking-wide">{label}</span>
+      </div>
+      {/* info */}
+      <div className="flex-1 min-w-0">
+        <p className="text-[13px] font-medium text-[#37352f] truncate">{block.mediaName ?? "Document"}</p>
+        <p className="text-[11px] text-[#9aa4b6]">{mime.split("/")[1]?.toUpperCase() ?? "FILE"}</p>
+      </div>
+      {/* open link */}
+      {block.mediaData && (
+        <a
+          href={block.mediaData}
+          download={block.mediaName ?? "download"}
+          onClick={(e) => e.stopPropagation()}
+          className="shrink-0 h-8 w-8 grid place-items-center rounded-lg text-[#9aa4b6] hover:text-[#3b82f6] hover:bg-blue-50 transition-colors"
+          title="Download"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M8 3v7M5 8l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M3 13h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+        </a>
+      )}
+      {/* delete */}
+      <button
+        onMouseDown={(e) => { e.preventDefault(); onRemove(); }}
+        className="shrink-0 h-8 w-8 grid place-items-center rounded-lg text-[#9aa4b6] hover:text-[#ef4444] hover:bg-red-50 opacity-0 group-hover/media:opacity-100 transition-all"
+        title="Remove"
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+        </svg>
+      </button>
     </div>
   );
 }
@@ -1454,6 +1726,15 @@ function BlockRow({
       },
     });
   };
+
+  // media blocks render independently
+  if (block.kind === "media") {
+    return (
+      <div data-block-id={block.id} className="row-in">
+        <MediaBlock block={block} onRemove={onRemove} onChange={onChange} />
+      </div>
+    );
+  }
 
   return (
     <div
