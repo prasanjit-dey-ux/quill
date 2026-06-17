@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Action = "summarise" | "improve" | "suggest" | "ask";
 
@@ -62,6 +62,7 @@ export function AIPanel({
   onInsert,
   onReplace,
   onAddTasks,
+  prefillText,
 }: {
   open: boolean;
   onClose: () => void;
@@ -69,12 +70,25 @@ export function AIPanel({
   onInsert: (text: string) => void;
   onReplace: (text: string) => void;
   onAddTasks: (lines: string[]) => void;
+  prefillText?: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [answer, setAnswer] = useState("");
   const [lastAction, setLastAction] = useState<Action | null>(null);
   const [ask, setAsk] = useState("");
+  const askInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // When prefillText changes (Ask AI from selection toolbar), populate ask box + focus
+  useEffect(() => {
+    if (prefillText && open) {
+      setAsk(prefillText);
+      setAnswer("");
+      setLastAction(null);
+      // small delay to let panel slide in
+      setTimeout(() => askInputRef.current?.focus(), 250);
+    }
+  }, [prefillText, open]);
 
   const run = async (action: Action, instruction?: string) => {
     abortRef.current?.abort();
@@ -213,6 +227,7 @@ export function AIPanel({
           className="relative"
         >
           <input
+            ref={askInputRef}
             value={ask}
             onChange={(e) => setAsk(e.target.value)}
             placeholder="Ask anything about this note…"

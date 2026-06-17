@@ -36,15 +36,19 @@ export const HEADING_CLASS: Record<1 | 2 | 3, string> = {
   3: "text-[17px] font-semibold leading-snug",
 };
 
-// ── Inline tokens: #tag and [[wikilink]] ─────────────────────────────────────
+// ── Inline tokens: #tag, [[wikilink]], **bold**, _italic_, __underline__ ──────
 type Token =
   | { type: "text"; value: string }
   | { type: "tag"; value: string }          // value = tag without "#"
   | { type: "link"; value: string }         // value = page title inside [[ ]]
   | { type: "url"; value: string }          // raw https?:// URL
-  | { type: "time" };                        // {{time}} → live clock
+  | { type: "time" }                        // {{time}} → live clock
+  | { type: "bold"; value: string }         // **text**
+  | { type: "italic"; value: string }       // _text_
+  | { type: "underline"; value: string };   // __text__
 
-const TOKEN_RE = /(\{\{time\}\})|(https?:\/\/[^\s<>"]+)|(\[\[[^\]]+\]\])|(#[A-Za-z0-9_\-/]+)/g;
+// Order matters: __underline__ before _italic_, **bold** standalone
+const TOKEN_RE = /(\{\{time\}\})|(https?:\/\/[^\s<>"]+)|(\[\[[^\]]+\]\])|(#[A-Za-z0-9_\-/]+)|(\*\*([^*]+)\*\*)|(__([^_]+)__)|((?<![_])_([^_]+)_(?![_]))/g;
 
 export function tokenize(text: string): Token[] {
   const out: Token[] = [];
@@ -57,6 +61,9 @@ export function tokenize(text: string): Token[] {
     else if (m[2]) out.push({ type: "url", value: m[2] });
     else if (m[3]) out.push({ type: "link", value: m[3].slice(2, -2).trim() });
     else if (m[4]) out.push({ type: "tag", value: m[4].slice(1) });
+    else if (m[5]) out.push({ type: "bold", value: m[6] });
+    else if (m[7]) out.push({ type: "underline", value: m[8] });
+    else if (m[9]) out.push({ type: "italic", value: m[10] });
     last = m.index + m[0].length;
   }
   if (last < text.length) out.push({ type: "text", value: text.slice(last) });
@@ -120,6 +127,9 @@ export function RichText({
             </button>
           );
         }
+        if (t.type === "bold") return <strong key={i} className="font-semibold">{t.value}</strong>;
+        if (t.type === "italic") return <em key={i}>{t.value}</em>;
+        if (t.type === "underline") return <u key={i}>{t.value}</u>;
         return <React.Fragment key={i}>{t.value}</React.Fragment>;
       })}
     </span>

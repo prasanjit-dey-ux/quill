@@ -629,6 +629,7 @@ function Index() {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => load<boolean>(LS_SIDEBAR, true));
   const [aiOpen, setAiOpen] = useState<boolean>(() => load<boolean>(LS_AIPANEL, false));
+  const [aiPrefill, setAiPrefill] = useState<string | undefined>(undefined);
   const [shareOpen, setShareOpen] = useState(false);
 
   const addRowFocusRef = useRef<(() => void) | null>(null);
@@ -1055,6 +1056,10 @@ function Index() {
                 onTag={onTagClick}
                 onInsertBelow={(kind, text) => insertAfter(b.id, kind, text)}
                 pageTitles={pages.map((p) => p.title || "Untitled")}
+                onAskAI={(text) => {
+                  setAiPrefill(text);
+                  setAiOpen(true);
+                }}
               />
             ))}
           </div>
@@ -1074,6 +1079,7 @@ function Index() {
         onInsert={aiInsert}
         onReplace={aiReplace}
         onAddTasks={aiAddTasks}
+        prefillText={aiPrefill}
       />
 
       {menu && <ContextMenu state={menu} onClose={() => setMenu(null)} />}
@@ -1094,6 +1100,73 @@ const SLASH_CMDS = [
   { id: "time",     label: "Time",        desc: "Insert live time",           icon: "⏱" },
 ];
 
+// ── SelectionToolbar ──────────────────────────────────────────────────────
+type ToolbarState = { x: number; y: number; start: number; end: number };
+
+function SelectionToolbar({
+  state,
+  draft,
+  onApply,
+  onAskAI,
+}: {
+  state: ToolbarState;
+  draft: string;
+  onApply: (next: string, caretStart: number, caretEnd: number) => void;
+  onAskAI: (text: string) => void;
+}) {
+  const sel = draft.slice(state.start, state.end);
+
+  const wrap = (marker: string) => {
+    const before = draft.slice(0, state.start);
+    const after  = draft.slice(state.end);
+    const already = sel.startsWith(marker) && sel.endsWith(marker);
+    if (already) {
+      const inner = sel.slice(marker.length, sel.length - marker.length);
+      onApply(before + inner + after, state.start, state.start + inner.length);
+    } else {
+      const next = before + marker + sel + marker + after;
+      onApply(next, state.start, state.end + marker.length * 2);
+    }
+  };
+
+  const isBold      = sel.startsWith("**") && sel.endsWith("**");
+  const isItalic    = sel.startsWith("_")  && sel.endsWith("_") && !isBold;
+  const isUnderline = sel.startsWith("__") && sel.endsWith("__");
+
+  const btn = (active: boolean) =>
+    `h-7 w-7 grid place-items-center rounded-md transition-colors text-[13px] font-semibold ${
+      active ? "bg-[#f0f0ee] text-ink" : "text-[#37352f] hover:bg-[#f0f0ee]"
+    }`;
+
+  return (
+    <div
+      className="fixed z-50 flex items-center gap-0.5 bg-white border border-[#e5e5e2] rounded-xl shadow-lg px-2 py-1.5"
+      style={{ left: state.x, top: state.y, transform: "translateX(-50%)" }}
+      onMouseDown={(e) => e.preventDefault()}
+    >
+      {/* Ask AI */}
+      <button
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12.5px] font-medium text-[#37352f] hover:bg-[#f0f0ee] transition-colors"
+        onClick={() => onAskAI(sel)}
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+          <path d="M8 1.5l1.4 3.8 3.8 1.4-3.8 1.4L8 11.9l-1.4-3.8-3.8-1.4 3.8-1.4L8 1.5z" fill="#6366f1"/>
+          <path d="M13 10l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6.6-1.6z" fill="#a5b4fc"/>
+        </svg>
+        Ask AI
+      </button>
+
+      {/* divider */}
+      <span className="h-5 w-px bg-[#e5e5e2] mx-0.5" />
+
+      {/* B I U */}
+      <button className={btn(isBold)}      onMouseDown={(e) => { e.preventDefault(); wrap("**"); }}><b>B</b></button>
+      <button className={btn(isItalic)}    onMouseDown={(e) => { e.preventDefault(); wrap("_"); }}><i>I</i></button>
+      <button className={btn(isUnderline)} onMouseDown={(e) => { e.preventDefault(); wrap("__"); }}><span style={{ textDecoration: "underline" }}>U</span></button>
+    </div>
+  );
+}
+
 // ── BlockRow ───────────────────────────────────────────────────────────────
 function BlockRow({
   block,
@@ -1106,6 +1179,7 @@ function BlockRow({
   onTag,
   onInsertBelow,
   pageTitles,
+  onAskAI,
 }: {
   block: Block;
   onToggle: () => void;
@@ -1117,12 +1191,31 @@ function BlockRow({
   onTag: (tag: string) => void;
   onInsertBelow: (kind: "todo" | "note", text: string) => void;
   pageTitles: string[];
+  onAskAI: (text: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(block.text);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [linkMenu, setLinkMenu] = useState<{ query: string; from: number } | null>(null);
   const [slashMenu, setSlashMenu] = useState<{ query: string; from: number } | null>(null);
+  const [selToolbar, setSelToolbar] = useState<ToolbarState | null>(null);
+
+  const updateSelToolbar = () => {
+    const ta = inputRef.current;
+    if (!ta) return;
+    const { selectionStart: s, selectionEnd: e } = ta;
+    if (s === e) { setSelToolbar(null); return; }
+    const rect = ta.getBoundingClientRect();
+    // approximate x center based on caret position ratio in textarea
+    const lineH = 24;
+    const charsPerLine = Math.max(1, Math.floor(ta.offsetWidth / 9.6));
+    const startLine = Math.floor(s / charsPerLine);
+    const endLine   = Math.floor(e / charsPerLine);
+    const midLine   = (startLine + endLine) / 2;
+    const approxX   = rect.left + rect.width / 2;
+    const approxY   = rect.top  + midLine * lineH - 8;
+    setSelToolbar({ x: approxX, y: approxY, start: s, end: e });
+  };
 
   useEffect(() => {
     if (editing) {
@@ -1395,12 +1488,31 @@ function BlockRow({
               setDraft(v);
               refreshLinkMenu(v, e.target.selectionStart);
             }}
-            onKeyUp={(e) => refreshLinkMenu((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart)}
-            onClick={(e) => refreshLinkMenu((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart)}
+            onKeyUp={(e) => { refreshLinkMenu((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart); updateSelToolbar(); }}
+            onClick={(e) => { refreshLinkMenu((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart); updateSelToolbar(); }}
+            onMouseUp={updateSelToolbar}
+            onSelect={updateSelToolbar}
             onKeyDown={handleKey}
-            onBlur={() => { setTimeout(() => { setLinkMenu(null); setSlashMenu(null); }, 120); commit(); }}
+            onBlur={() => { setTimeout(() => { setLinkMenu(null); setSlashMenu(null); setSelToolbar(null); }, 150); commit(); }}
             className="w-full text-[16px] leading-6 -mt-px"
           />
+          {/* selection toolbar */}
+          {selToolbar && (
+            <SelectionToolbar
+              state={selToolbar}
+              draft={draft}
+              onApply={(next, cs, ce) => {
+                setDraft(next);
+                onChange({ text: next });
+                requestAnimationFrame(() => {
+                  const ta = inputRef.current;
+                  if (ta) { ta.focus(); ta.setSelectionRange(cs, ce); }
+                  updateSelToolbar();
+                });
+              }}
+              onAskAI={(text) => { setSelToolbar(null); onAskAI(text); }}
+            />
+          )}
           {/* slash command palette */}
           {slashMenu && slashMatches.length > 0 && (
             <div className="absolute left-0 top-full mt-1 z-30 w-64 rounded-lg border border-[#e3e6ec] bg-white shadow-lg py-1">
