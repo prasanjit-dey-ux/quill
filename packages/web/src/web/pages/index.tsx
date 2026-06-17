@@ -465,7 +465,10 @@ function LeftSidebar({
       >
         {/* header — title + collapse only */}
         <div className="flex items-center justify-between pl-3.5 pr-2 pt-[18px] pb-1">
-          <span className="text-[14px] font-semibold text-ink tracking-tight">Quill</span>
+          <div className="flex items-center gap-2">
+            <img src="/quill-logo-clean.png" alt="Quill" className="h-5 w-5 object-contain" />
+            <span className="text-[14px] font-semibold text-ink tracking-tight">Quill</span>
+          </div>
           <button
             onClick={onToggle}
             title="Collapse sidebar"
